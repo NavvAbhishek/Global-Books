@@ -25,13 +25,13 @@ public class RabbitMQConfig {
     public static final String PAYMENT_REQUEST_QUEUE = "payment.request.queue";
     public static final String PAYMENT_RESPONSE_QUEUE = "payment.response.queue";
     public static final String PAYMENT_STATUS_QUEUE = "payment.status.queue";
-    public static final String PAYMENT_DLQ = "payment.dlq";
+    public static final String PAYMENT_DLQ = "order.dlq";
 
     // Routing keys
     public static final String PAYMENT_REQUEST_KEY = "payment.request";
     public static final String PAYMENT_RESPONSE_KEY = "payment.response";
     public static final String PAYMENT_STATUS_KEY = "payment.status";
-    public static final String PAYMENT_DLQ_KEY = "payment.dead";
+    public static final String PAYMENT_DLQ_KEY = "order.dead";
 
     @Value("${spring.rabbitmq.host}")
     private String host;
@@ -131,7 +131,7 @@ public class RabbitMQConfig {
 
     @Bean
     public Queue deadLetterQueue() {
-        return QueueBuilder.durable(PAYMENT_DLQ).build();
+        return QueueBuilder.durable("order.dlq").build();
     }
 
     // Bindings
@@ -164,6 +164,6 @@ public class RabbitMQConfig {
         return BindingBuilder
                 .bind(deadLetterQueue())
                 .to(deadLetterExchange())
-                .with(PAYMENT_DLQ_KEY);
+                .with("order.dead");
     }
 }

@@ -1,6 +1,9 @@
 package com.globalbooks.orders.service;
 
 import com.globalbooks.orders.dto.*;
+import com.globalbooks.orders.dto.messaging.OrderEventMessage;
+import com.globalbooks.orders.dto.messaging.PaymentRequestMessage;
+import com.globalbooks.orders.messaging.OrderMessageProducer;
 import com.globalbooks.orders.exception.OrderNotFoundException;
 import com.globalbooks.orders.exception.InvalidOrderException;
 import com.globalbooks.orders.model.Order;
@@ -26,6 +29,7 @@ import java.util.stream.Collectors;
 public class OrderService {
 
     private final OrderRepository orderRepository;
+    private final OrderMessageProducer messageProducer;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -75,7 +79,48 @@ public class OrderService {
         Order savedOrder = orderRepository.save(order);
         log.info("Order created successfully with ID: {} for customer: {}", savedOrder.getOrderId(), authenticatedUsername);
 
+        // Send payment request to PaymentsService via RabbitMQ
+        PaymentRequestMessage paymentRequest = PaymentRequestMessage.builder()
+                .orderId(savedOrder.getOrderId())
+                .customerId(savedOrder.getCustomerId())
+                .amount(savedOrder.getTotalAmount())
+                .currency("USD")
+                .paymentMethod(orderDTO.getPaymentMethod())
+                .paymentDetails(convertToPaymentDetails(orderDTO))
+                .build();
+
+        messageProducer.sendPaymentRequest(paymentRequest);
+
+        // Publish order created event
+        OrderEventMessage orderEvent = OrderEventMessage.builder()
+                .orderId(savedOrder.getOrderId())
+                .customerId(savedOrder.getCustomerId())
+                .totalAmount(savedOrder.getTotalAmount())
+                .status(savedOrder.getStatus().toString())
+                .items(convertToItemDtos(savedOrder.getItems()))
+                .build();
+
+        messageProducer.publishOrderCreatedEvent(orderEvent);
+
+        // Update order status to payment pending
+        savedOrder.setStatus(OrderStatus.PAYMENT_PENDING);
+        orderRepository.save(savedOrder);
+
         return convertToResponseDTO(savedOrder);
+    }
+
+    public void initiatePaymentForOrder(String orderId, PaymentRequestMessage paymentRequest) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException("Order not found: " + orderId));
+
+        paymentRequest.setOrderId(orderId);
+        paymentRequest.setCustomerId(order.getCustomerId());
+        paymentRequest.setAmount(order.getTotalAmount());
+
+        messageProducer.sendPaymentRequest(paymentRequest);
+
+        order.setStatus(OrderStatus.PAYMENT_PENDING);
+        orderRepository.save(order);
     }
 
     @Transactional(readOnly = true)
@@ -119,6 +164,10 @@ public class OrderService {
         validateStatusTransition(order.getStatus(), statusUpdate.getStatus());
 
         order.setStatus(statusUpdate.getStatus());
+
+        // Publish status update event
+        messageProducer.publishOrderStatusUpdate(orderId, statusUpdate.getStatus().toString());
+
         Order updatedOrder = orderRepository.save(order);
 
         log.info("Order {} status updated successfully", orderId);
@@ -161,17 +210,36 @@ public class OrderService {
         log.info("Order ownership verified successfully for user {}", userId);
     }
 
+    // Helper methods
     private String generateOrderId() {
         return "ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
     }
 
     private void validateStatusTransition(OrderStatus currentStatus, OrderStatus newStatus) {
-        // Define valid transitions
+        // Define valid transitions including new statuses
         boolean validTransition = switch (currentStatus) {
-            case PENDING -> newStatus == OrderStatus.CONFIRMED || newStatus == OrderStatus.CANCELLED;
-            case CONFIRMED -> newStatus == OrderStatus.SHIPPED || newStatus == OrderStatus.CANCELLED;
-            case SHIPPED -> newStatus == OrderStatus.DELIVERED;
-            case DELIVERED, CANCELLED -> false;
+            case PENDING -> newStatus == OrderStatus.PAYMENT_PENDING ||
+                    newStatus == OrderStatus.CANCELLED;
+            case PAYMENT_PENDING -> newStatus == OrderStatus.PAYMENT_COMPLETED ||
+                    newStatus == OrderStatus.PAYMENT_FAILED ||
+                    newStatus == OrderStatus.CANCELLED;
+            case PAYMENT_COMPLETED -> newStatus == OrderStatus.PROCESSING ||
+                    newStatus == OrderStatus.READY_TO_SHIP ||
+                    newStatus == OrderStatus.REFUNDED;
+            case PAYMENT_FAILED -> newStatus == OrderStatus.PAYMENT_PENDING ||
+                    newStatus == OrderStatus.CANCELLED;
+            case PROCESSING -> newStatus == OrderStatus.READY_TO_SHIP ||
+                    newStatus == OrderStatus.CANCELLED;
+            case READY_TO_SHIP -> newStatus == OrderStatus.SHIPPED;
+            case SHIPPED -> newStatus == OrderStatus.IN_TRANSIT ||
+                    newStatus == OrderStatus.DELIVERED;
+            case IN_TRANSIT -> newStatus == OrderStatus.DELIVERED;
+            case DELIVERED -> newStatus == OrderStatus.REFUNDED;
+            case CANCELLED, REFUNDED -> false; // Terminal states
+            // Handle old statuses for backward compatibility
+            case CONFIRMED -> newStatus == OrderStatus.PROCESSING ||
+                    newStatus == OrderStatus.SHIPPED ||
+                    newStatus == OrderStatus.CANCELLED;
         };
 
         if (!validTransition) {
@@ -179,6 +247,43 @@ public class OrderService {
                     String.format("Invalid status transition from %s to %s", currentStatus, newStatus)
             );
         }
+    }
+
+    private PaymentRequestMessage.PaymentDetails convertToPaymentDetails(OrderCreateDTO dto) {
+
+        if (dto.getPaymentDetails() == null) {
+            return null;
+        }
+
+        // Extract payment details from the order DTO if available
+        PaymentRequestMessage.PaymentDetails.PaymentDetailsBuilder builder =
+                PaymentRequestMessage.PaymentDetails.builder();
+
+        // Map payment details from DTO
+        builder.cardNumber(dto.getPaymentDetails().get("cardNumber"))
+                .cardHolderName(dto.getPaymentDetails().get("cardHolderName"))
+                .expiryMonth(dto.getPaymentDetails().get("expiryMonth"))
+                .expiryYear(dto.getPaymentDetails().get("expiryYear"))
+                .cvv(dto.getPaymentDetails().get("cvv"));
+
+        // Add email from shipping address if available
+        if (dto.getShippingAddress() != null && dto.getShippingAddress().getEmail() != null) {
+            builder.email(dto.getShippingAddress().getEmail());
+        }
+
+        return builder.build();
+    }
+
+    private List<OrderEventMessage.OrderItemDto> convertToItemDtos(List<OrderItem> items) {
+        return items.stream()
+                .map(item -> OrderEventMessage.OrderItemDto.builder()
+                        .productId(item.getProductId())
+                        .productName(item.getProductName() != null ?
+                                item.getProductName() : "Product " + item.getProductId())
+                        .quantity(item.getQuantity())
+                        .price(item.getUnitPrice())
+                        .build())
+                .collect(Collectors.toList());
     }
 
     private OrderResponseDTO convertToResponseDTO(Order order) {
@@ -191,6 +296,12 @@ public class OrderService {
         dto.setPaymentMethod(order.getPaymentMethod());
         dto.setCreatedAt(order.getCreatedAt());
         dto.setUpdatedAt(order.getUpdatedAt());
+
+        // Add RabbitMQ-related fields if they exist
+        dto.setPaymentId(order.getPaymentId());
+        dto.setTransactionId(order.getTransactionId());
+        dto.setShipmentId(order.getShipmentId());
+        dto.setTrackingNumber(order.getTrackingNumber());
 
         // Convert shipping address from JSON
         try {

@@ -7,6 +7,7 @@ import lombok.Data;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 @Data
 public class OrderCreateDTO {
@@ -22,4 +23,6 @@ public class OrderCreateDTO {
 
     @NotNull(message = "Payment method is required")
     private String paymentMethod;
+
+    private Map<String, String> paymentDetails;
 }

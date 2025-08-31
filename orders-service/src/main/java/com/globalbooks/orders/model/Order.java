@@ -55,4 +55,25 @@ public class Order {
     @Column(name = "updated_at")
     @UpdateTimestamp
     private LocalDateTime updatedAt;
+
+    @Column(name = "payment_id")
+    private String paymentId;
+
+    @Column(name = "transaction_id")
+    private String transactionId;
+
+    @Column(name = "payment_failure_reason")
+    private String paymentFailureReason;
+
+    @Column(name = "shipment_id")
+    private String shipmentId;
+
+    @Column(name = "tracking_number")
+    private String trackingNumber;
+
+    @Column(name = "carrier")
+    private String carrier;
+
+    @Column(name = "delivered_at")
+    private LocalDateTime deliveredAt;
 }

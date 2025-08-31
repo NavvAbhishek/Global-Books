@@ -1,6 +1,7 @@
 package com.globalbooks.orders.dto;
 
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Email;
 import lombok.Data;
 
 @Data
@@ -18,4 +19,9 @@ public class ShippingAddressDTO {
     private String zip;
 
     private String country = "USA";
+
+    @Email(message = "Invalid email format")
+    private String email;
+
+    private String phone;
 }

@@ -19,4 +19,10 @@ public class OrderResponseDTO {
     private List<OrderItemDTO> items;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    // Payment and shipping related fields
+    private String paymentId;
+    private String transactionId;
+    private String shipmentId;
+    private String trackingNumber;
 }
