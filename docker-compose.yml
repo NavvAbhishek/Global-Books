@@ -8,7 +8,7 @@ services:
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=post@123
-      - POSTGRES_MULTIPLE_DATABASES=globalbooks_catalog,globalbooks_payments
+      - POSTGRES_MULTIPLE_DATABASES=globalbooks_catalog,globalbooks_payments,globalbooks_shipping
     ports:
       - "5432:5432"
     volumes:
@@ -73,6 +73,28 @@ services:
       - "8082:8082"
     environment:
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/globalbooks_payments
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=post@123
+      - SPRING_RABBITMQ_HOST=rabbitmq
+      - SPRING_RABBITMQ_PORT=5672
+      - SPRING_RABBITMQ_USERNAME=guest
+      - SPRING_RABBITMQ_PASSWORD=guest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - globalbooks-network
+    restart: unless-stopped
+
+  shipping-service:
+    build: ./shipping-service
+    container_name: shipping-service
+    ports:
+      - "8083:8083"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/globalbooks_shipping
       - SPRING_DATASOURCE_USERNAME=postgres
       - SPRING_DATASOURCE_PASSWORD=post@123
       - SPRING_RABBITMQ_HOST=rabbitmq
